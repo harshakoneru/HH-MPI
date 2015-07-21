@@ -12,14 +12,23 @@ It calculates Mean ISI, Firing Correlation, Avg Firing correlation etc.
 
 const int N = 100;
 const int k = 8;   //Define the mean degree of the network
-const double timewell = 1.0;  // ????????????
-const double time_max = 5000.0;   
+const double timewell = 1.0;  // ???????????? Timewell is a bin. You divide your timescale into 1ms bins and check if there are cases
+							  // where two neurons fired together in the same bin.
+const double time_max = 300.0;  //Total time for running the simulation
+const double dt = 0.01; //ms  Time steo size
 
-double xna = 0.9; 
-double xk = 0.6;
+
+const double Dmin = 0.01; //Initial value of coupling strength
+const double Dmax = 0.1; //Final value of coupling strength
+const double D_step = 0.01; //Step size of coupling strength
+const int no_of_trials = 10; //Number of trials done
+
+double xna = 1.0; 
+double xk = 0.7;
 double rhona = 60.0; //um-2
 double rhok = 18.0; //um-2
 double S = 1.0; //Membrane patch size
+
 double Nna;
 double Nk;
 double  GNa=120.0;
@@ -32,7 +41,7 @@ double	VK = -12.0;
 double	VL=10.5995;
 //double VL = -54.4; //mV (This is according to the paper)
 double	c = 1.0;
-int n_one_cycle = 1000;  // ????????????????
+int n_one_cycle = 1000;  // ???????????????? No of time steps consumed in a spike. (approximation)
 double D  = 0.001;
 double firing_coherence = 0.0;
 //float *voltagematrix, **tspike, *timematrix,*vjunk,*tjunk;
@@ -41,6 +50,7 @@ double KV( double C, double V,double m,double h,double n);
 double Km( double V , double m );
 double Kh( double V , double h );
 double Kn( double V , double n );
+double Kcoupling(double a[N], double b[][N], int m, double k[N], int index);
 double Kcoupling1(double a[N], double b[][N], int m, double k[N], int index);
 
 int randomnumbergenerator(int max_num);
@@ -65,33 +75,34 @@ int main()
  int no_spikes[N];
 
 //Defining and initializing the Matrix containing edges
-
-
-double edgematrix[N][N];   // ????
-double edgematrix1[N][N]; // ????
+double edgematrix[N][N];   // This is the adjacency matrix used to store the topology (both initial and rewired)
+double edgematrix1[N][N]; // In edgematrix1, I store the initial ring topology of the network. Used for comparision with the rewired matrix
 
 FILE *firingcoherenceid;
-firingcoherenceid = fopen("FiringCoherenceVaryingDn0(100,8) (0.9; 0.6).txt","w"); // ????
-
+firingcoherenceid = fopen("FiringCoherenceVaryingDs(100,8) (0.9; 0.6).txt","w"); // This file stores the Firing Coherence values for various coupling strengths (D)
 FILE *fcdegreeid;
-fcdegreeid = fopen("FCDegreeVaryingDsn0(100,8) (0.9; 0.6).txt","w");// ????
+fcdegreeid = fopen("FCDegreeVaryingD(100,8) (0.9; 0.6).txt","w");// This file stores the Firing Correlation values as a function of degree of separation
 
 FILE *fisiid;
-fisiid = fopen("ISI_no_connectionsn0(100,8) (0.9; 0.6).txt","w");// ????
+fisiid = fopen("ISI_no_connections(100,8) (0.9; 0.6).txt","w");// This file stores the ISIs of induvidual neurons in the network
 
 FILE *fmeanisiid;
-fmeanisiid = fopen("MeanISIn0(100,8) (0.9; 0.6).txt","w"); // ????
+fmeanisiid = fopen("MeanISI(100,8) (0.9; 0.6).txt","w"); // This file stores the mean ISI of all the neurons in the network
 
-/*FILE *fspikecountid;
-fspikecountid = fopen("No_of_spikes(100,8)(1.0,0.7).txt","w") // ????
-*/
-
-for(D = 0.1; D <= 0.2; D = D + 0.05)
+for(D = Dmin; D <= Dmax; D = D + D_step)
 {
 	printf("D = %f\n",D);
 
 
 	double tot_degree[12]; // ??????
+	/*We are calculating the firing correlation as a function of degree in the network
+	We are averaging our results over a number of variations in the network to reduce
+	the effects of noise on the validity of our results.
+	tot_degree is a variable which stores the firing correlation value over a particular degree of separation
+	Over 'n' trials, we add up the values of firing correlation for one particular degree of separation in this
+	and divide by the number of trials in which neurons are separated by those many number of hops
+	count_degree stores the number of trials in which there exists a particular degree of separation
+	*/
 	int count_degree[12];    // ???
 	int i,j,l; //Looping variables. Not using k because it is already used above.
 	for( i = 0; i < N; i++) // i ---> number of neurons
@@ -99,7 +110,7 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 	   no_spikes[i] = 0;  // 
 	}
 
-	for(i =0; i < 12; i++) // i --> degree of separation
+	for(i =0; i < 12; i++) // i ---> degree of separation
 	{ 
 		tot_degree[i] = 0;  // ???
 		count_degree[i] = 0;  // ???? , i ???
@@ -117,7 +128,7 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 
 	int trial = 0;
 
-	for(trial = 0; trial < 10;  trial++)
+	for(trial = 0; trial < no_of_trials;  trial++)
 
 	{
 
@@ -250,7 +261,10 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 			edgematrix[i][j] = 0;
 			edgematrix[j][i] = 0;
 			Done = 0;
-			while (Done != 1)  // done ??????
+			while (Done != 1)  // done ??????  
+			//Done is a flag variable. rewiringnumber stores the index of a random neuron in the network to which neuron 'i' gets rewired to.
+			//Self loops and redundant connections are avoided
+			//Hence, once we establish a connection which is not a self loop or a redundant connection, Done becomes 1 and we get out of the loop
 			{
 				rewiringnumber = randomnumbergenerator(N-1);
 				if (rewiringnumber != i && edgematrix[i][rewiringnumber] == 0) //Eliminating self-loops& redundant connections
@@ -285,10 +299,6 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 		no_of_connections = 0;
 		for(j = 0; j < N; j++)
 		{
-			if (edgematrix[i][j] == 1)
-			{
-			edgematrix[i][j] = 1;
-			}
 			fprintf(fAdjacencymatrixId, "%f   ", edgematrix[i][j]); //Printing Adjacency Matrix of neuron
 			if(edgematrix[i][j] == 1)
 			{
@@ -303,7 +313,7 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 		//printf("Finished writing adjacency matrix into the file. \n\n");
 		//printf("Finished printing number of connections per neuron. \n\n");
 
-		for(i = 0; i < N; i++) // ????
+		for(i = 0; i < N; i++) // ???? Iterating through all the nodes in the network
 		{
 		connections[i] = connections[i]/2.0; // ???
 		}
@@ -312,6 +322,7 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 		int countno = 0;
 		for(i = 0; i < N-1; i++)
 		{
+
 			for(j = i+1; j<N; j++)
 			{
 			if(edgematrix[i][j] == 0 && edgematrix1[i][j] == 1)
@@ -342,7 +353,6 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 		double k2[N],m2[N],n2[N],h2[N],coupling2[N];
 		double k3[N],m3[N],n3[N],h3[N],coupling3[N];
 		double k4[N],m4[N],n4[N],h4[N];
-		double dt = 0.01; //ms
 		//double time_max = 100.0; //ms
 		int n_steps = (int)time_max/dt;
 		printf("No of time steps: %d\n",n_steps);
@@ -403,7 +413,7 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 			coupling[i] = sum_coupling;
 		}
 
-		//Starting calculation
+		//Starting calculation using RK4
 		for(l = 0; l <= n_steps; l++)
 		{
 			//printf("%f\n",l*dt );
@@ -528,11 +538,8 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 		}
 	}
 
-	//float *vjunk;
-	//float *tjunk;
-	//int countnotimes = 0;
+
 	fVTid = fopen("VT.txt","r");
-	//voltagematrix  = voltagematrix = (float *)(malloc(n_steps*sizeof(float)));
 	float voltagematrix[n_steps];
 	float timematrix[n_steps];
 	for(i = 0; i < n_steps; i++)
@@ -540,22 +547,11 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 		voltagematrix[i] = 0.0;
 		timematrix[i] = 0.0;
 	}	
-/*
-	tspike = (float **)malloc((n_steps/n_one_cycle)*sizeof(float));
-	for(c = 0; c < (n_steps); c++)
-	{
-	tspike[c] = (float *)malloc((n_steps/n_one_cycle) * sizeof(float));
-	}
-*/
+
 	float	tspike[N][n_steps/n_one_cycle];
 	for (i=0;i<N;i++)
 		for (j=0;j< (n_steps/n_one_cycle);j++)
 			tspike[i][j]=0;
-
-//	timematrix = (float *)malloc((n_steps)*sizeof(float));
-
-	//vjunk = (float *)malloc((n_steps)*sizeof(float));
-	//tjunk = (float *)malloc((n_steps)*sizeof(float));
 
 	for(i = 0; i < N; i++)
 	{
@@ -1022,6 +1018,22 @@ for(D = 0.1; D <= 0.2; D = D + 0.05)
 		double s;
 		s = (0.01*(10-V)/(exp((10-V)/10) - 1))*(1-n) -n*(0.125*exp(-V/80));
 		return (s);
+	}
+
+
+	double Kcoupling(double a[N], double b[][N], int m, double k[N], int index)
+	{
+		//a[N] is the V[j] array at a particular time
+		//k[N] is the runge kutta coefficient matrix
+		//b[][N] is the edgematrix
+		//m is the runge-kutta step flag
+		double sum_coupling = 0.0;
+		int i = 0;
+		for(i = 0; i<N; i++)
+		{
+			sum_coupling = sum_coupling + (b[index][i]*((a[i] + 0.5*k[i]) - (a[index] + 0.5*k[index])));
+		}
+		return sum_coupling;
 	}
 
 
